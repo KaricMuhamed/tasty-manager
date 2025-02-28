@@ -5,7 +5,7 @@ $(document).ready(function () {
     var consumerKey = 'ck_16d3b7b2dc3e8de14b797aea3b14da06079b78fb';
     var consumerSecret = 'cs_af1e3fafa1ed1b90ba84ae48cdd83253f249aa2e';
 
-    // Create authentication query parameters instead of using headers
+    // Create authentication query parameters
     var authParams = {
         consumer_key: consumerKey,
         consumer_secret: consumerSecret
@@ -217,7 +217,7 @@ $(document).ready(function () {
         $.ajax({
             url: baseUrl + '/products/' + productId,
             method: 'GET',
-            headers: { 'Authorization': authHeader },
+            data: authParams,
             success: function (product) {
                 populateUpdateForm(product);
                 $('#updateProductForm').show();
@@ -395,9 +395,8 @@ $(document).ready(function () {
         }
 
         $.ajax({
-            url: baseUrl + '/products/' + productId,
+            url: baseUrl + '/products/' + productId + '?' + $.param(authParams),
             method: 'PUT',
-            headers: { 'Authorization': authHeader },
             data: JSON.stringify(formData),
             contentType: 'application/json',
             success: function(response) {
@@ -478,9 +477,8 @@ $(document).ready(function () {
         };
 
         $.ajax({
-            url: baseUrl + '/products',
+            url: baseUrl + '/products?' + $.param(authParams),
             method: 'POST',
-            headers: { 'Authorization': authHeader },
             data: JSON.stringify(formData),
             contentType: 'application/json',
             success: function(response) {
