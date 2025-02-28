@@ -87,16 +87,7 @@ $(document).ready(function () {
                 $('#prevPage').prop('disabled', page <= 1);
                 $('#nextPage').prop('disabled', page >= totalPages);
 
-                $.each(products, function (index, product) {
-                    var row = '<tr>' +
-                        '<td>' + product.id + '</td>' +
-                        '<td>' + product.name + '</td>' +
-                        '<td>' + product.type + '</td>' +
-                        '<td>' + product.regular_price + '</td>' +
-                        '<td>' + (product.description ? product.description.substring(0, 100) + '...' : '') + '</td>' +
-                        '</tr>';
-                    tbody.append(row);
-                });
+                displayProducts(products);
             },
             error: function (xhr, status, error) {
                 alert('Error fetching products: ' + error);
@@ -104,6 +95,27 @@ $(document).ready(function () {
             complete: function() {
                 loadingManager.hideTableLoading();
             }
+        });
+    }
+
+    function displayProducts(products) {
+        const tbody = $('#productsTable tbody');
+        tbody.empty();
+
+        products.forEach(product => {
+            const imageUrl = product.images && product.images.length > 0 
+                ? product.images[0].src 
+                : 'https://via.placeholder.com/50x50?text=No+Image';
+            
+            const row = `<tr>
+                <td><img src="${imageUrl}" alt="${product.name}" class="product-thumbnail"></td>
+                <td>${product.id}</td>
+                <td>${product.name}</td>
+                <td>${product.type}</td>
+                <td>${product.regular_price ? '€' + product.regular_price : 'N/A'}</td>
+                <td>${product.description ? product.description.substring(0, 100) + '...' : ''}</td>
+            </tr>`;
+            tbody.append(row);
         });
     }
 
