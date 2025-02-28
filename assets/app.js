@@ -104,23 +104,25 @@ $(document).ready(function () {
                 ? product.images[0].src 
                 : 'https://via.placeholder.com/150?text=No+Image';
             
+            // Find BF article number from meta_data
+            const bfArticleNumber = product.meta_data.find(meta => meta.key === 'bf_artikelnummer')?.value || product.id;
+            
             const row = $(`
                 <tr>
                     <td><img src="${imageUrl}" alt="${product.name}" class="product-image"></td>
-                    <td>${product.id}</td>
+                    <td>${bfArticleNumber}</td>
                     <td>${product.name}</td>
                     <td>${product.type}</td>
                     <td>€${product.regular_price || 'N/A'}</td>
                     <td>${product.description ? product.description.replace(/<[^>]*>/g, '').substring(0, 100) + '...' : ''}</td>
                     <td>
-                        <button class="btn btn-sm btn-outline-primary edit-product" data-product-id="${product.id}">
+                        <button class="btn btn-sm btn-outline-primary edit-product" data-product-id="${product.id}" data-bf-number="${bfArticleNumber}">
                             <i class="fas fa-pencil-alt"></i>
                         </button>
                     </td>
                 </tr>
             `);
             
-            // Attach edit handler directly to this row's button
             row.find('.edit-product').on('click', function() {
                 const productId = $(this).data('product-id');
                 loadProductForEdit(productId);
@@ -146,7 +148,7 @@ $(document).ready(function () {
                     const csvRows = [];
                     
                     // Add CSV header
-                    const headers = ['ID', 'Name', 'Type', 'Regular Price (€)', 'Sale Price (€)', 'Stock Status', 
+                    const headers = ['BF Article Number', 'Name', 'Type', 'Regular Price (€)', 'Sale Price (€)', 'Stock Status', 
                                    'Stock Quantity', 'Gebinde', 'Unit', 'Unit Amount', 'Description'];
                     csvRows.push(headers.join(','));
 
@@ -158,9 +160,10 @@ $(document).ready(function () {
                         // Find unit and unit amount from meta data
                         const unitMeta = product.meta_data.find(meta => meta.key === '_unit');
                         const unitAmountMeta = product.meta_data.find(meta => meta.key === '_unit_amount');
+                        const bfArticleNumber = product.meta_data.find(meta => meta.key === 'bf_artikelnummer')?.value || product.id;
                         
                         const row = [
-                            product.id,
+                            bfArticleNumber,
                             `"${product.name.replace(/"/g, '""')}"`,  // Escape quotes in name
                             product.type,
                             product.regular_price || '',
@@ -221,6 +224,8 @@ $(document).ready(function () {
             success: function (product) {
                 populateUpdateForm(product);
                 $('#updateProductForm').show();
+                // Store BF article number for later use
+                $('#updateProductForm').data('bf-number', product.meta_data.find(meta => meta.key === 'bf_artikelnummer')?.value || product.id);
                 // Scroll to the form
                 $('html, body').animate({
                     scrollTop: $('#updateProductForm').offset().top - 100
@@ -279,15 +284,42 @@ $(document).ready(function () {
 
     // Event Handlers
     $('#searchProduct').on('click', function() {
-        const productId = $('#searchProductId').val();
-        if (productId) {
+        const searchValue = $('#searchProductId').val();
+        if (searchValue) {
             loadingManager.setButtonLoading(this, true);
-            loadProductForEdit(productId);
-            loadingManager.setButtonLoading(this, false);
+            
+            // First try to find product by BF article number
+            $.ajax({
+                url: baseUrl + '/products',
+                method: 'GET',
+                data: {
+                    ...authParams,
+                    meta_key: 'bf_artikelnummer',
+                    meta_value: searchValue
+                },
+                success: function(products) {
+                    if (products && products.length > 0) {
+                        loadProductForEdit(products[0].id);
+                    } else {
+                        // If not found by BF number, try by ID as fallback
+                        loadProductForEdit(searchValue);
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error('Error searching product:', error);
+                    alert('Error searching product. Please check the console for details.');
+                },
+                complete: function() {
+                    loadingManager.setButtonLoading('#searchProduct', false);
+                }
+            });
         } else {
-            alert('Please enter a product ID');
+            alert('Please enter a product ID or BF article number');
         }
     });
+
+    // Update the search input placeholder
+    $('#searchProductId').attr('placeholder', 'Enter BF Article Number or Product ID');
 
     // Close update form
     $('#closeUpdateForm').on('click', function() {
