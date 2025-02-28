@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preisansicht - Tasty Product Manager</title>
+    <!-- Bootstrap CSS -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="assets/styles.css">
+    <style>
+        .price-changed {
+            background-color: #fff3cd;
+        }
+        .save-button {
+            display: none;
+            margin-left: 10px;
+        }
+        .price-input {
+            width: 100px;
+        }
+        .price-cell {
+            display: flex;
+            align-items: center;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Global Loading Overlay -->
+    <div class="loading-overlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">Loading...</div>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="container">
+            <h1 class="app-title">
+                <i class="fas fa-euro-sign mr-2"></i>
+                Preisansicht
+            </h1>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container">
+        <div class="card mt-4">
+            <div class="card-body">
+                <div class="table-loading">
+                    <div class="table-spinner">
+                        <div class="loading-spinner"></div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table" id="priceTable">
+                            <thead>
+                                <tr>
+                                    <th>Produkt Name</th>
+                                    <th>Gebinde</th>
+                                    <th>Preis (€)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Products will be loaded here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- Pagination -->
+                <div class="d-flex justify-content-between align-items-center mt-3">
+                    <div class="pagination-info">
+                        Showing <span id="currentPageInfo">0-0</span> of <span id="totalProducts">0</span> products
+                    </div>
+                    <div class="btn-group">
+                        <button id="prevPage" class="btn btn-outline-primary">
+                            <i class="fas fa-chevron-left mr-2"></i>Previous
+                        </button>
+                        <button id="nextPage" class="btn btn-outline-primary">
+                            Next<i class="fas fa-chevron-right ml-2"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="container mt-5 mb-3 text-center text-muted">
+        <small>&copy; 2024 Tasty Product Manager. All rights reserved.</small>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.bundle.min.js"></script>
+    <script>
+        $(document).ready(function () {
+            // Configuration
+            var baseUrl = 'https://tasty-ideas.de/wp-json/wc/v3';
+            var consumerKey = 'ck_16d3b7b2dc3e8de14b797aea3b14da06079b78fb';
+            var consumerSecret = 'cs_af1e3fafa1ed1b90ba84ae48cdd83253f249aa2e';
+            var authHeader = "Basic " + btoa(consumerKey + ":" + consumerSecret);
+
+            // Pagination variables
+            var currentPage = 1;
+            var perPage = 20;
+            var totalProducts = 0;
+
+            // Loading state management
+            const loadingManager = {
+                showGlobal: function(message = 'Loading...') {
+                    $('.loading-overlay .loading-text').text(message);
+                    $('.loading-overlay').css('display', 'flex');
+                },
+                hideGlobal: function() {
+                    $('.loading-overlay').hide();
+                },
+                showTableLoading: function() {
+                    $('.table-loading').addClass('is-loading');
+                },
+                hideTableLoading: function() {
+                    $('.table-loading').removeClass('is-loading');
+                }
+            };
+
+            function loadProducts(page = 1) {
+                loadingManager.showTableLoading();
+                
+                $.ajax({
+                    url: baseUrl + '/products',
+                    method: 'GET',
+                    headers: { 'Authorization': authHeader },
+                    data: {
+                        per_page: perPage,
+                        page: page
+                    },
+                    success: function (products, textStatus, request) {
+                        displayProducts(products);
+                        updatePagination(page, request);
+                    },
+                    error: function (xhr, status, error) {
+                        console.error('Error fetching products:', error);
+                        alert('Error fetching products. Please check the console for details.');
+                    },
+                    complete: function() {
+                        loadingManager.hideTableLoading();
+                    }
+                });
+            }
+
+            function updatePagination(page, request) {
+                totalProducts = parseInt(request.getResponseHeader('X-WP-Total') || 0);
+                var totalPages = parseInt(request.getResponseHeader('X-WP-TotalPages') || 0);
+                
+                var startItem = (page - 1) * perPage + 1;
+                var endItem = Math.min(page * perPage, totalProducts);
+                $('#currentPageInfo').text(startItem + '-' + endItem);
+                $('#totalProducts').text(totalProducts);
+
+                $('#prevPage').prop('disabled', page <= 1);
+                $('#nextPage').prop('disabled', page >= totalPages);
+                
+                currentPage = page;
+            }
+
+            function displayProducts(products) {
+                const tbody = $('#priceTable tbody');
+                tbody.empty();
+
+                products.forEach(product => {
+                    const gebindeAttr = product.attributes.find(attr => attr.name === 'Gebinde');
+                    const gebinde = gebindeAttr ? gebindeAttr.options[0] : 'N/A';
+                    
+                    const row = $(`
+                        <tr>
+                            <td>${product.name}</td>
+                            <td>${gebinde}</td>
+                            <td class="price-cell">
+                                <input type="number" 
+                                       class="form-control price-input" 
+                                       value="${product.regular_price}"
+                                       data-original-price="${product.regular_price}"
+                                       data-product-id="${product.id}"
+                                       step="0.01">
+                                <button class="btn btn-success btn-sm save-button">
+                                    <i class="fas fa-save"></i> Save
+                                </button>
+                            </td>
+                        </tr>
+                    `);
+                    
+                    tbody.append(row);
+                });
+
+                // Add event listeners for price changes
+                $('.price-input').on('input', function() {
+                    const input = $(this);
+                    const originalPrice = input.data('original-price');
+                    const currentPrice = input.val();
+                    const saveButton = input.siblings('.save-button');
+                    
+                    if (currentPrice !== originalPrice) {
+                        input.addClass('price-changed');
+                        saveButton.show();
+                    } else {
+                        input.removeClass('price-changed');
+                        saveButton.hide();
+                    }
+                });
+
+                // Add event listeners for save buttons
+                $('.save-button').on('click', function() {
+                    const button = $(this);
+                    const input = button.siblings('.price-input');
+                    const productId = input.data('product-id');
+                    const newPrice = input.val();
+
+                    // Disable input and button while saving
+                    button.prop('disabled', true);
+                    input.prop('disabled', true);
+
+                    $.ajax({
+                        url: baseUrl + '/products/' + productId,
+                        method: 'PUT',
+                        headers: { 'Authorization': authHeader },
+                        data: JSON.stringify({
+                            regular_price: newPrice
+                        }),
+                        contentType: 'application/json',
+                        success: function(response) {
+                            // Update the original price and reset the UI
+                            input.data('original-price', newPrice);
+                            input.removeClass('price-changed');
+                            button.hide();
+                            alert('Price updated successfully!');
+                        },
+                        error: function(xhr, status, error) {
+                            console.error('Error updating price:', error);
+                            alert('Error updating price. Please check the console for details.');
+                        },
+                        complete: function() {
+                            // Re-enable input and button
+                            button.prop('disabled', false);
+                            input.prop('disabled', false);
+                        }
+                    });
+                });
+            }
+
+            // Event handlers for pagination
+            $('#prevPage').on('click', function() {
+                if (currentPage > 1) {
+                    loadProducts(currentPage - 1);
+                }
+            });
+
+            $('#nextPage').on('click', function() {
+                loadProducts(currentPage + 1);
+            });
+
+            // Initialize
+            loadProducts(1);
+        });
+    </script>
+</body>
+
+</html> 

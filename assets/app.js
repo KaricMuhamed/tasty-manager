@@ -1,16 +1,20 @@
 $(document).ready(function () {
-    // Configuration: Replace these with your actual store URL and API keys.
+    // Configuration
     var baseUrl = 'https://tasty-ideas.de/wp-json/wc/v3';
+    var wpBaseUrl = 'https://tasty-ideas.de/wp-json/wp/v2';
     var consumerKey = 'ck_16d3b7b2dc3e8de14b797aea3b14da06079b78fb';
     var consumerSecret = 'cs_af1e3fafa1ed1b90ba84ae48cdd83253f249aa2e';
+
+    // Create authentication query parameters instead of using headers
+    var authParams = {
+        consumer_key: consumerKey,
+        consumer_secret: consumerSecret
+    };
 
     // Pagination variables
     var currentPage = 1;
     var perPage = 20;
     var totalProducts = 0;
-
-    // Create a Basic Authentication header
-    var authHeader = "Basic " + btoa(consumerKey + ":" + consumerSecret);
 
     // Loading state management
     const loadingManager = {
@@ -36,13 +40,11 @@ $(document).ready(function () {
         setButtonLoading: function(button, isLoading) {
             const $button = $(button);
             if (isLoading) {
-                $button.addClass('is-loading')
-                    .prop('disabled', true)
+                $button.prop('disabled', true)
                     .data('original-text', $button.html())
-                    .html('');
+                    .html('<span class="spinner-border spinner-border-sm mr-2" role="status" aria-hidden="true"></span>Loading...');
             } else {
-                $button.removeClass('is-loading')
-                    .prop('disabled', false)
+                $button.prop('disabled', false)
                     .html($button.data('original-text'));
             }
         }
@@ -55,47 +57,42 @@ $(document).ready(function () {
         $.ajax({
             url: baseUrl + '/products',
             method: 'GET',
-            headers: { 'Authorization': authHeader },
             data: {
+                ...authParams,
                 per_page: perPage,
                 page: page
             },
             success: function (products, textStatus, request) {
-                // Store the response data for debugging
-                window.lastApiResponse = {
-                    products: products,
-                    headers: {
-                        total: request.getResponseHeader('X-WP-Total'),
-                        totalPages: request.getResponseHeader('X-WP-TotalPages')
-                    }
-                };
-
-                var tbody = $('#productsTable tbody');
-                tbody.empty();
-
-                // Update total products from headers
-                totalProducts = parseInt(request.getResponseHeader('X-WP-Total') || 0);
-                var totalPages = parseInt(request.getResponseHeader('X-WP-TotalPages') || 0);
-
-                // Update pagination info
-                var startItem = (page - 1) * perPage + 1;
-                var endItem = Math.min(page * perPage, totalProducts);
-                $('#currentPageInfo').text(startItem + '-' + endItem);
-                $('#totalProducts').text(totalProducts);
-
-                // Update button states
-                $('#prevPage').prop('disabled', page <= 1);
-                $('#nextPage').prop('disabled', page >= totalPages);
-
                 displayProducts(products);
+                updatePagination(page, request);
             },
             error: function (xhr, status, error) {
-                alert('Error fetching products: ' + error);
+                console.error('Error fetching products:', error);
+                if (xhr.status === 403) {
+                    alert('Authentication failed. Please check your API credentials.');
+                } else {
+                    alert('Error fetching products. Please check the console for details.');
+                }
             },
             complete: function() {
                 loadingManager.hideTableLoading();
             }
         });
+    }
+
+    function updatePagination(page, request) {
+        totalProducts = parseInt(request.getResponseHeader('X-WP-Total') || 0);
+        var totalPages = parseInt(request.getResponseHeader('X-WP-TotalPages') || 0);
+        
+        var startItem = (page - 1) * perPage + 1;
+        var endItem = Math.min(page * perPage, totalProducts);
+        $('#currentPageInfo').text(startItem + '-' + endItem);
+        $('#totalProducts').text(totalProducts);
+
+        $('#prevPage').prop('disabled', page <= 1);
+        $('#nextPage').prop('disabled', page >= totalPages);
+        
+        currentPage = page;
     }
 
     function displayProducts(products) {
@@ -105,72 +102,361 @@ $(document).ready(function () {
         products.forEach(product => {
             const imageUrl = product.images && product.images.length > 0 
                 ? product.images[0].src 
-                : 'https://via.placeholder.com/50x50?text=No+Image';
+                : 'https://via.placeholder.com/150?text=No+Image';
             
-            const row = `<tr>
-                <td><img src="${imageUrl}" alt="${product.name}" class="product-thumbnail"></td>
-                <td>${product.id}</td>
-                <td>${product.name}</td>
-                <td>${product.type}</td>
-                <td>${product.regular_price ? '€' + product.regular_price : 'N/A'}</td>
-                <td>${product.description ? product.description.substring(0, 100) + '...' : ''}</td>
-            </tr>`;
+            const row = $(`
+                <tr>
+                    <td><img src="${imageUrl}" alt="${product.name}" class="product-image"></td>
+                    <td>${product.id}</td>
+                    <td>${product.name}</td>
+                    <td>${product.type}</td>
+                    <td>€${product.regular_price || 'N/A'}</td>
+                    <td>${product.description ? product.description.replace(/<[^>]*>/g, '').substring(0, 100) + '...' : ''}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary edit-product" data-product-id="${product.id}">
+                            <i class="fas fa-pencil-alt"></i>
+                        </button>
+                    </td>
+                </tr>
+            `);
+            
+            // Attach edit handler directly to this row's button
+            row.find('.edit-product').on('click', function() {
+                const productId = $(this).data('product-id');
+                loadProductForEdit(productId);
+            });
+            
             tbody.append(row);
+        });
+
+        // Function to download all products as CSV
+        function downloadAllProductsAsCSV() {
+            loadingManager.setButtonLoading('#downloadCsv', true);
+
+            // Get all products (no pagination)
+            $.ajax({
+                url: baseUrl + '/products',
+                method: 'GET',
+                data: {
+                    ...authParams,
+                    per_page: 100  // Maximum allowed per page
+                },
+                success: function(products) {
+                    // Prepare CSV data
+                    const csvRows = [];
+                    
+                    // Add CSV header
+                    const headers = ['ID', 'Name', 'Type', 'Regular Price (€)', 'Sale Price (€)', 'Stock Status', 
+                                   'Stock Quantity', 'Gebinde', 'Unit', 'Unit Amount', 'Description'];
+                    csvRows.push(headers.join(','));
+
+                    // Add product data
+                    products.forEach(product => {
+                        const gebindeAttr = product.attributes.find(attr => attr.name === 'Gebinde');
+                        const gebinde = gebindeAttr ? gebindeAttr.options[0] : '';
+                        
+                        // Find unit and unit amount from meta data
+                        const unitMeta = product.meta_data.find(meta => meta.key === '_unit');
+                        const unitAmountMeta = product.meta_data.find(meta => meta.key === '_unit_amount');
+                        
+                        const row = [
+                            product.id,
+                            `"${product.name.replace(/"/g, '""')}"`,  // Escape quotes in name
+                            product.type,
+                            product.regular_price || '',
+                            product.sale_price || '',
+                            product.stock_status,
+                            product.stock_quantity || '',
+                            `"${gebinde.replace(/"/g, '""')}"`,
+                            unitMeta ? unitMeta.value : '',
+                            unitAmountMeta ? unitAmountMeta.value : '',
+                            `"${product.description.replace(/<[^>]*>/g, '').replace(/"/g, '""').replace(/\n/g, ' ')}"` // Clean description
+                        ];
+                        
+                        csvRows.push(row.join(','));
+                    });
+
+                    // Create and download CSV file
+                    const csvContent = csvRows.join('\n');
+                    // Add UTF-8 BOM
+                    const BOM = '\uFEFF';
+                    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+                    const link = document.createElement('a');
+                    if (navigator.msSaveBlob) { // IE 10+
+                        navigator.msSaveBlob(blob, 'products.csv');
+                    } else {
+                        link.href = URL.createObjectURL(blob);
+                        link.setAttribute('download', 'products.csv');
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error('Error downloading products:', error);
+                    alert('Error downloading products. Please check the console for details.');
+                },
+                complete: function() {
+                    loadingManager.setButtonLoading('#downloadCsv', false);
+                }
+            });
+        }
+
+        // Event handler for CSV download
+        $('#downloadCsv').on('click', downloadAllProductsAsCSV);
+    }
+
+    function loadProductForEdit(productId) {
+        if (!productId) {
+            alert('Please enter a valid product ID');
+            return;
+        }
+
+        loadingManager.showGlobal('Loading product details...');
+        
+        $.ajax({
+            url: baseUrl + '/products/' + productId,
+            method: 'GET',
+            headers: { 'Authorization': authHeader },
+            success: function (product) {
+                populateUpdateForm(product);
+                $('#updateProductForm').show();
+                // Scroll to the form
+                $('html, body').animate({
+                    scrollTop: $('#updateProductForm').offset().top - 100
+                }, 500);
+            },
+            error: function (xhr, status, error) {
+                console.error('Error loading product:', error);
+                alert('Error finding product. Please check the console for details.');
+            },
+            complete: function() {
+                loadingManager.hideGlobal();
+            }
         });
     }
 
-    // Load initial page
-    loadProducts(currentPage);
+    function populateUpdateForm(product) {
+        // Store the original product data for comparison
+        $('#updateProductForm').data('original-product', product);
 
-    // Handle pagination clicks
-    $('#prevPage').click(function () {
+        $('#updateProductId').val(product.id);
+        $('#updateProductName').val(product.name);
+        $('#updateProductSku').val(product.sku);
+        $('#updateProductDescription').val(product.description.replace(/<[^>]*>/g, ''));
+        $('#updateShortDescription').val(product.short_description.replace(/<[^>]*>/g, ''));
+        $('#updateRegularPrice').val(product.regular_price);
+        $('#updateSalePrice').val(product.sale_price);
+        $('#updateStockStatus').val(product.stock_status);
+        $('#updateStockQuantity').val(product.stock_quantity);
+        $('#updateTaxStatus').prop('checked', product.tax_status === 'taxable');
+
+        // Handle Gebinde attribute
+        const gebindeAttr = product.attributes.find(attr => attr.name === 'Gebinde');
+        if (gebindeAttr && gebindeAttr.options.length > 0) {
+            $('#updateGebindeType').val(gebindeAttr.options[0]);
+        }
+
+        // Handle meta data
+        product.meta_data.forEach(function (meta) {
+            switch (meta.key) {
+                case '_unit':
+                    $('#updateUnit').val(meta.value);
+                    break;
+                case '_unit_amount':
+                    $('#updateUnitAmount').val(meta.value);
+                    break;
+                case '_delivery_time':
+                    $('#updateDeliveryTime').val(meta.value);
+                    break;
+            }
+        });
+
+        // Handle categories
+        const categoryValues = product.categories.map(cat => cat.slug);
+        $('#updateCategories').val(categoryValues);
+    }
+
+    // Event Handlers
+    $('#searchProduct').on('click', function() {
+        const productId = $('#searchProductId').val();
+        if (productId) {
+            loadingManager.setButtonLoading(this, true);
+            loadProductForEdit(productId);
+            loadingManager.setButtonLoading(this, false);
+        } else {
+            alert('Please enter a product ID');
+        }
+    });
+
+    // Close update form
+    $('#closeUpdateForm').on('click', function() {
+        $('#updateProductForm').hide();
+        // Clear the form
+        $('#productUpdateForm')[0].reset();
+        $('#updateProductId').val('');
+    });
+
+    $('#prevPage').on('click', function() {
         if (currentPage > 1) {
-            currentPage--;
-            loadProducts(currentPage);
+            loadProducts(currentPage - 1);
         }
     });
 
-    $('#nextPage').click(function () {
-        currentPage++;
-        loadProducts(currentPage);
+    $('#nextPage').on('click', function() {
+        loadProducts(currentPage + 1);
     });
 
-    // Load products on page load and when switching back to the List tab
-    $('a[data-toggle="tab"]').on('shown.bs.tab', function (e) {
-        if ($(e.target).attr('href') === '#list') {
-            currentPage = 1;
-            loadProducts(currentPage);
-        }
-    });
-
-    // Handle the Create Product form submission
-    $('#createProductForm').submit(function (e) {
+    // Product update form submission
+    $('#productUpdateForm').on('submit', function(e) {
         e.preventDefault();
+        const productId = $('#updateProductId').val();
+        
+        if (!productId) {
+            alert('No product selected for update');
+            return;
+        }
+
+        loadingManager.showFormLoading('#productUpdateForm');
+        
+        // Get the original product data
+        const originalProduct = $('#updateProductForm').data('original-product');
+        const formData = {};
+
+        // Helper function to check if a field has changed
+        function hasFieldChanged(currentValue, originalValue) {
+            return currentValue !== '' && currentValue !== undefined && 
+                   currentValue !== null && currentValue !== originalValue;
+        }
+
+        // Check basic fields
+        const fields = {
+            name: $('#updateProductName').val(),
+            sku: $('#updateProductSku').val(),
+            description: $('#updateProductDescription').val(),
+            short_description: $('#updateShortDescription').val(),
+            regular_price: $('#updateRegularPrice').val(),
+            sale_price: $('#updateSalePrice').val(),
+            stock_status: $('#updateStockStatus').val(),
+            stock_quantity: $('#updateStockQuantity').val()
+        };
+
+        // Add only changed fields to formData
+        Object.entries(fields).forEach(([key, value]) => {
+            if (hasFieldChanged(value, originalProduct[key])) {
+                formData[key] = value;
+            }
+        });
+
+        // Check tax status
+        const taxStatus = $('#updateTaxStatus').is(':checked') ? 'taxable' : 'none';
+        if (taxStatus !== originalProduct.tax_status) {
+            formData.tax_status = taxStatus;
+        }
+
+        // Check Gebinde attribute
+        const gebindeType = $('#updateGebindeType').val();
+        const originalGebinde = originalProduct.attributes.find(attr => attr.name === 'Gebinde');
+        const originalGebindeValue = originalGebinde ? originalGebinde.options[0] : '';
+        
+        if (hasFieldChanged(gebindeType, originalGebindeValue)) {
+            formData.attributes = [{
+                name: 'Gebinde',
+                options: [gebindeType],
+                visible: true,
+                variation: false
+            }];
+        }
+
+        // Check meta fields
+        const changedMeta = [];
+        const metaFields = {
+            '_unit': $('#updateUnit').val(),
+            '_unit_amount': $('#updateUnitAmount').val(),
+            '_delivery_time': $('#updateDeliveryTime').val()
+        };
+
+        Object.entries(metaFields).forEach(([key, value]) => {
+            const originalMeta = originalProduct.meta_data.find(m => m.key === key);
+            if (hasFieldChanged(value, originalMeta ? originalMeta.value : '')) {
+                changedMeta.push({ key: key, value: value });
+            }
+        });
+
+        if (changedMeta.length > 0) {
+            formData.meta_data = changedMeta;
+        }
+
+        // Check if any fields were changed
+        if (Object.keys(formData).length === 0) {
+            alert('No changes detected');
+            loadingManager.hideFormLoading('#productUpdateForm');
+            return;
+        }
+
+        $.ajax({
+            url: baseUrl + '/products/' + productId,
+            method: 'PUT',
+            headers: { 'Authorization': authHeader },
+            data: JSON.stringify(formData),
+            contentType: 'application/json',
+            success: function(response) {
+                alert('Product updated successfully!');
+                $('#updateProductForm').hide();
+                loadProducts(currentPage);
+            },
+            error: function(xhr, status, error) {
+                console.error('Error updating product:', error);
+                alert('Error updating product. Please check the console for details.');
+            },
+            complete: function() {
+                loadingManager.hideFormLoading('#productUpdateForm');
+            }
+        });
+    });
+
+    // Handle file input change and show preview
+    $('#productImage').on('change', function(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+        
+        // Update file input label
+        $(this).next('.custom-file-label').html(file.name);
+        
+        // Show image preview
+        reader.onload = function(e) {
+            $('#imagePreview img').attr('src', e.target.result);
+            $('#imagePreview').show();
+        };
+        
+        reader.readAsDataURL(file);
+    });
+
+    // Product create form submission
+    $('#createProductForm').on('submit', function(e) {
+        e.preventDefault();
+        
         loadingManager.showFormLoading('#createProductForm');
         
-        // Basic product data
-        var productData = {
+        // Create product directly without image
+        const formData = {
             name: $('#productName').val(),
-            type: 'simple',
-            regular_price: $('#regularPrice').val().toString(),
-            sale_price: $('#salePrice').val() ? $('#salePrice').val().toString() : '',
+            sku: $('#productSku').val(),
             description: $('#productDescription').val(),
             short_description: $('#shortDescription').val(),
-            manage_stock: true,
+            regular_price: $('#regularPrice').val(),
+            sale_price: $('#salePrice').val(),
             stock_status: $('#stockStatus').val(),
-            stock_quantity: parseInt($('#stockQuantity').val()) || 0,
-            categories: $('#categories').val().map(function (category) {
-                return { name: category };
-            }),
-            attributes: [
-                {
-                    name: 'Gebinde',
-                    position: 0,
-                    visible: true,
-                    variation: false,
-                    options: [$('#gebindeType').val()]
-                }
-            ],
+            stock_quantity: $('#stockQuantity').val(),
+            tax_status: $('#taxStatus').is(':checked') ? 'taxable' : 'none',
+            status: 'publish',
+            type: 'simple',
+            attributes: [{
+                name: 'Gebinde',
+                options: [$('#gebindeType').val()],
+                visible: true,
+                variation: false
+            }],
             meta_data: [
                 {
                     key: '_unit',
@@ -184,61 +470,30 @@ $(document).ready(function () {
                     key: '_delivery_time',
                     value: $('#deliveryTime').val()
                 }
-            ]
+            ],
+            categories: $('#categories').val().map(category => ({
+                id: 0,
+                name: category
+            }))
         };
 
-        // Only add SKU if it's provided
-        var sku = $('#productSku').val();
-        if (sku && sku.trim() !== '') {
-            productData.sku = sku.trim();
-        }
-
-        // Set tax status
-        if ($('#taxStatus').is(':checked')) {
-            productData.tax_status = 'taxable';
-        } else {
-            productData.tax_status = 'none';
-        }
-
-        // Create product
         $.ajax({
             url: baseUrl + '/products',
             method: 'POST',
-            headers: {
-                'Authorization': authHeader,
-                'Content-Type': 'application/json'
-            },
-            data: JSON.stringify(productData),
-            success: function (response) {
-                $('#createResult').html(
-                    '<div class="alert alert-success">' +
-                    '<h5>Product created successfully!</h5>' +
-                    '<p>Product ID: ' + response.id + '</p>' +
-                    '<p>Name: ' + response.name + '</p>' +
-                    '</div>'
-                );
+            headers: { 'Authorization': authHeader },
+            data: JSON.stringify(formData),
+            contentType: 'application/json',
+            success: function(response) {
+                alert('Product created successfully!');
+                // Clear the form
                 $('#createProductForm')[0].reset();
-                loadProducts(currentPage);
+                // Switch to list tab and refresh products
+                $('#apiTabs a[href="#list"]').tab('show');
+                loadProducts(1);
             },
-            error: function (xhr, status, error) {
-                var errorMessage = '';
-                try {
-                    var response = JSON.parse(xhr.responseText);
-                    if (response.code === 'product_invalid_sku') {
-                        errorMessage = 'The SKU (article number) is already in use. Please choose a different SKU or leave it empty.';
-                    } else {
-                        errorMessage = response.message;
-                    }
-                } catch (e) {
-                    errorMessage = xhr.responseText;
-                }
-
-                $('#createResult').html(
-                    '<div class="alert alert-danger">' +
-                    '<h5>Error creating product:</h5>' +
-                    '<p>' + errorMessage + '</p>' +
-                    '</div>'
-                );
+            error: function(xhr, status, error) {
+                console.error('Error creating product:', error);
+                alert('Error creating product. Please check the console for details.');
             },
             complete: function() {
                 loadingManager.hideFormLoading('#createProductForm');
@@ -246,195 +501,47 @@ $(document).ready(function () {
         });
     });
 
-    // Add debug button click handler
-    $('#debugButton').click(function () {
-        if (window.lastApiResponse) {
-            console.log('=== WooCommerce API Response Debug ===');
-            console.log('Current Page:', currentPage);
-            console.log('Products per Page:', perPage);
-            console.log('Total Products:', window.lastApiResponse.headers.total);
-            console.log('Total Pages:', window.lastApiResponse.headers.totalPages);
-            console.log('Products Data:', window.lastApiResponse.products);
-            console.log('================================');
-        } else {
-            console.log('No API response data available yet');
-        }
-    });
+    // Add event listeners for save buttons
+    $('.save-button').on('click', function() {
+        const button = $(this);
+        const input = button.siblings('.price-input');
+        const productId = input.data('product-id');
+        const newPrice = input.val();
 
-    // Handle product search
-    $('#searchProduct').click(function () {
-        var productId = $('#searchProductId').val();
-        if (!productId) {
-            alert('Please enter a product ID');
-            return;
-        }
+        // Disable input and button while saving
+        button.prop('disabled', true);
+        input.prop('disabled', true);
 
-        const $searchButton = $(this);
-        loadingManager.setButtonLoading($searchButton, true);
-        
         $.ajax({
-            url: baseUrl + '/products/' + productId,
-            method: 'GET',
-            headers: { 'Authorization': authHeader },
-            success: function (product) {
-                // Store the product ID for update
-                $('#updateProductId').val(product.id);
-
-                // Fill the form with product data
-                $('#updateProductName').val(product.name);
-                $('#updateProductSku').val(product.sku);
-                $('#updateProductDescription').val(product.description);
-                $('#updateShortDescription').val(product.short_description);
-                $('#updateRegularPrice').val(product.regular_price);
-                $('#updateSalePrice').val(product.sale_price);
-                $('#updateStockStatus').val(product.stock_status);
-                $('#updateStockQuantity').val(product.stock_quantity);
-                $('#updateTaxStatus').prop('checked', product.tax_status === 'taxable');
-
-                // Handle Gebinde attribute
-                var gebindeAttr = product.attributes.find(attr => attr.name === 'Gebinde');
-                if (gebindeAttr && gebindeAttr.options.length > 0) {
-                    $('#updateGebindeType').val(gebindeAttr.options[0]);
-                }
-
-                // Handle meta data
-                product.meta_data.forEach(function (meta) {
-                    switch (meta.key) {
-                        case '_unit':
-                            $('#updateUnit').val(meta.value);
-                            break;
-                        case '_unit_amount':
-                            $('#updateUnitAmount').val(meta.value);
-                            break;
-                        case '_delivery_time':
-                            $('#updateDeliveryTime').val(meta.value);
-                            break;
-                    }
-                });
-
-                // Handle categories
-                var categoryValues = product.categories.map(cat => cat.name);
-                $('#updateCategories').val(categoryValues);
-
-                // Show the update form
-                $('#updateProductForm').show();
-            },
-            error: function (xhr, status, error) {
-                alert('Error finding product: ' + error);
-            },
-            complete: function() {
-                loadingManager.setButtonLoading($searchButton, false);
-            }
-        });
-    });
-
-    // Handle product update
-    $('#productUpdateForm').submit(function (e) {
-        e.preventDefault();
-        loadingManager.showFormLoading('#productUpdateForm');
-        
-        var productId = $('#updateProductId').val();
-
-        var productData = {
-            name: $('#updateProductName').val(),
-            type: 'simple',
-            regular_price: $('#updateRegularPrice').val().toString(),
-            sale_price: $('#updateSalePrice').val() ? $('#updateSalePrice').val().toString() : '',
-            description: $('#updateProductDescription').val(),
-            short_description: $('#updateShortDescription').val(),
-            manage_stock: true,
-            stock_status: $('#updateStockStatus').val(),
-            stock_quantity: parseInt($('#updateStockQuantity').val()) || 0,
-            categories: $('#updateCategories').val().map(function (category) {
-                return { name: category };
-            }),
-            attributes: [
-                {
-                    name: 'Gebinde',
-                    position: 0,
-                    visible: true,
-                    variation: false,
-                    options: [$('#updateGebindeType').val()]
-                }
-            ],
-            meta_data: [
-                {
-                    key: '_unit',
-                    value: $('#updateUnit').val()
-                },
-                {
-                    key: '_unit_amount',
-                    value: $('#updateUnitAmount').val()
-                },
-                {
-                    key: '_delivery_time',
-                    value: $('#updateDeliveryTime').val()
-                }
-            ]
-        };
-
-        // Only add SKU if it's provided
-        var sku = $('#updateProductSku').val();
-        if (sku && sku.trim() !== '') {
-            productData.sku = sku.trim();
-        }
-
-        // Set tax status
-        if ($('#updateTaxStatus').is(':checked')) {
-            productData.tax_status = 'taxable';
-        } else {
-            productData.tax_status = 'none';
-        }
-
-        // Update product
-        $.ajax({
-            url: baseUrl + '/products/' + productId,
+            url: baseUrl + '/products/' + productId + '?' + $.param(authParams),
             method: 'PUT',
-            headers: {
-                'Authorization': authHeader,
-                'Content-Type': 'application/json'
+            data: JSON.stringify({
+                regular_price: newPrice
+            }),
+            contentType: 'application/json',
+            success: function(response) {
+                // Update the original price and reset the UI
+                input.data('original-price', newPrice);
+                input.removeClass('price-changed');
+                button.hide();
+                alert('Price updated successfully!');
             },
-            data: JSON.stringify(productData),
-            success: function (response) {
-                $('#updateResult').html(
-                    '<div class="alert alert-success">' +
-                    '<h5>Product updated successfully!</h5>' +
-                    '<p>Product ID: ' + response.id + '</p>' +
-                    '<p>Name: ' + response.name + '</p>' +
-                    '</div>'
-                );
-                loadProducts(currentPage);
-            },
-            error: function (xhr, status, error) {
-                var errorMessage = '';
-                try {
-                    var response = JSON.parse(xhr.responseText);
-                    if (response.code === 'product_invalid_sku') {
-                        errorMessage = 'The SKU (article number) is already in use. Please choose a different SKU or leave it empty.';
-                    } else {
-                        errorMessage = response.message;
-                    }
-                } catch (e) {
-                    errorMessage = xhr.responseText;
+            error: function(xhr, status, error) {
+                console.error('Error updating price:', error);
+                if (xhr.status === 403) {
+                    alert('Authentication failed. Please check your API credentials.');
+                } else {
+                    alert('Error updating price. Please check the console for details.');
                 }
-
-                $('#updateResult').html(
-                    '<div class="alert alert-danger">' +
-                    '<h5>Error updating product:</h5>' +
-                    '<p>' + errorMessage + '</p>' +
-                    '</div>'
-                );
             },
             complete: function() {
-                loadingManager.hideFormLoading('#productUpdateForm');
+                // Re-enable input and button
+                button.prop('disabled', false);
+                input.prop('disabled', false);
             }
         });
     });
 
-    // Add global AJAX loading indicator
-    $(document).ajaxStart(function() {
-        loadingManager.showGlobal();
-    }).ajaxStop(function() {
-        loadingManager.hideGlobal();
-    });
+    // Initialize
+    loadProducts(1);
 });
